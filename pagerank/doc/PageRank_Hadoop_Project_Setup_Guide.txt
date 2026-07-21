@@ -1,0 +1,87 @@
+PageRank on Hadoop - Project Setup Guide
+
+1. Verify Environment
+
+-   Ubuntu 22.04 (VirtualBox)
+-   Java installed
+-   Hadoop installed and configured
+-   HDFS, YARN running
+-   Python 3
+-   Apache Pig
+-   Maven (for Java version)
+
+Check: - jps - hdfs dfs -ls / - yarn node -list
+
+2. Project Structure
+
+pagerank/
+ ├── dataset/
+ ├── python/
+ │ ├── mapper.py
+ │ ├── reducer.py
+ │ └── run.sh
+ ├── java/
+ ├── pig/
+ ├── output/
+ ├── benchmark/
+ └── log/
+
+3. Prepare Dataset
+
+Start with a small graph, then test with WikiVote or CA-HepTh.
+
+4. Upload to HDFS
+
+-   Create /pagerank/input
+-   Upload dataset
+-   Verify upload
+
+5. Build Execution Pipeline
+
+For each iteration: Input -> Mapper -> Shuffle -> Reducer -> Output
+Output(i) becomes Input(i+1)
+
+Keep every iteration output.
+
+6. First Algorithm Parameters
+
+-   Damping Factor = 0.85
+-   Initial Rank = 1/N (recommended)
+-   Max Iteration = 20
+-   Convergence Threshold = 1e-6 (optional)
+-   Reducers = 1
+-   HDFS Replication = 1
+-   Block Size = 128 MB
+
+7. Automation Script
+
+run.sh should: 1. Clean old output 2. Upload input 3. Execute PageRank
+iterations 4. Save execution time 5. Download final output 6. Save logs
+
+8. Validation
+
+After every run: - Verify total PageRank - Verify convergence - Record
+execution time - Save Hadoop logs
+
+9. Benchmark
+
+Run the same datasets on: - Python (Streaming) - Java (MapReduce API) -
+Apache Pig
+
+Collect: - Execution time - Iterations - Output - Notes
+
+10. Recommended Execution Plan
+
+Phase 1: - Environment verification
+
+Phase 2: - Python implementation
+
+Phase 3: - Validation scripts
+
+Phase 4: - Large dataset benchmark
+
+Phase 5: - Java implementation
+
+Phase 6: - Apache Pig implementation
+
+Phase 7: - Compare results and prepare report.
