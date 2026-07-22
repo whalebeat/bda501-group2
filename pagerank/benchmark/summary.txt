@@ -1,0 +1,12 @@
+Implementation=Python Hadoop Streaming
+Dataset=dataset/graph.txt
+Nodes=4
+Damping=0.85
+Threshold=1e-6
+Reducers=1
+Iterations=16
+Converged=1
+TotalPageRank=0.999999999999997
+TotalTimeSeconds=292
+FinalOutput=/home/hdoop/bda501-group2/pagerank/output/final.txt
+LogFile=/home/hdoop/bda501-group2/pagerank/log/python_pagerank_20260722_201317.log
