@@ -2,150 +2,109 @@
 # -*- coding: utf-8 -*-
 
 """
-PageRank Reducer
+PageRank Reducer for Hadoop Streaming.
 
 Input:
-    Node<TAB>value
+    Node<TAB>LINKS:AdjacencyList
+    Node<TAB>Contribution
 
-value có thể là:
+Output:
+    Node<TAB>NewPageRank<TAB>AdjacencyList
 
-    LINKS:B,C,D
-
-hoặc
-
-    0.333333
-
-Output
-
-Node<TAB>NewRank<TAB>AdjacencyList
+DANGLING is the dangling mass from the previous iteration.
+For iteration 1, run.sh calculates it from the initial graph using rank 1/N.
 """
 
 import os
 import sys
 
-# ---------------------------------------------------------------------
 
-DEFAULT_DAMPING = 0.85
-
-DAMPING = float(
-    os.getenv(
-        "DAMPING",
-        DEFAULT_DAMPING
-    )
-)
-
-NUM_NODES = int(
-    os.getenv(
-        "NUM_NODES",
-        "1"
-    )
-)
-
-# ---------------------------------------------------------------------
-
-
-def log(message):
+def log(message: str) -> None:
+    """Write warning messages to stderr."""
     print(message, file=sys.stderr)
 
 
-def compute_rank(rank_sum):
-    """
-    Compute new PageRank.
-    """
-
-    base = (1.0 - DAMPING) / NUM_NODES
-
-    return base + DAMPING * rank_sum
-
-
-def emit(node, rank_sum, links):
-    """
-    Emit one node.
-    """
-
-    rank = compute_rank(rank_sum)
-
-    print(
-        f"{node}\t{rank:.10f}\t{links}"
-    )
-
-
-# ---------------------------------------------------------------------
-
-current_node = None
-
-rank_sum = 0.0
-
-graph = ""
-
-# ---------------------------------------------------------------------
-
-for line in sys.stdin:
-
-    line = line.strip()
-
-    if line == "":
-        continue
-
+def read_positive_int(name: str) -> int:
+    """Read a positive integer environment variable."""
     try:
+        value = int(os.getenv(name, "0"))
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
 
-        node, value = line.split("\t", 1)
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero")
 
-    except ValueError:
+    return value
 
-        log(f"[WARN] Bad record: {line}")
 
-        continue
+def read_float(name: str, default: str) -> float:
+    """Read a float environment variable."""
+    try:
+        return float(os.getenv(name, default))
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be numeric") from exc
 
-    # ----------------------------------------
 
-    if current_node is None:
+NUM_NODES = read_positive_int("NUM_NODES")
+DAMPING = read_float("DAMPING", "0.85")
+DANGLING = read_float("DANGLING", "0.0")
 
-        current_node = node
+if not 0.0 < DAMPING < 1.0:
+    raise RuntimeError("DAMPING must be between 0 and 1")
 
-    # ----------------------------------------
+if DANGLING < 0.0:
+    raise RuntimeError("DANGLING cannot be negative")
 
-    if node != current_node:
+BASE_RANK = (1.0 - DAMPING) / NUM_NODES
+DANGLING_SHARE = DAMPING * DANGLING / NUM_NODES
 
-        emit(
-            current_node,
-            rank_sum,
-            graph
-        )
 
-        current_node = node
+def emit(node: str, rank_sum: float, adjacency: str) -> None:
+    """Calculate and emit the new PageRank of one node."""
+    new_rank = BASE_RANK + DAMPING * rank_sum + DANGLING_SHARE
+    print(f"{node}\t{new_rank:.15f}\t{adjacency}")
 
-        rank_sum = 0.0
 
-        graph = ""
+def main() -> None:
+    """Run the reducer over sorted mapper output."""
+    current_node = None
+    rank_sum = 0.0
+    adjacency = ""
 
-    # ----------------------------------------
+    for raw_line in sys.stdin:
+        line = raw_line.rstrip("\r\n")
 
-    if value.startswith("LINKS:"):
-
-        graph = value.replace(
-            "LINKS:",
-            ""
-        )
-
-    else:
+        if not line:
+            continue
 
         try:
-
-            rank_sum += float(value)
-
+            node, value = line.split("\t", 1)
         except ValueError:
+            log(f"[WARN] Invalid mapper output: {line}")
+            continue
 
-            log(
-                f"[WARN] Invalid contribution: {line}"
-            )
+        if current_node is None:
+            current_node = node
 
-# ---------------------------------------------------------------------
+        elif node != current_node:
+            emit(current_node, rank_sum, adjacency)
 
-if current_node is not None:
+            current_node = node
+            rank_sum = 0.0
+            adjacency = ""
 
-    emit(
-        current_node,
-        rank_sum,
-        graph
-    )
+        if value.startswith("LINKS:"):
+            adjacency = value[len("LINKS:"):]
+
+        else:
+            try:
+                rank_sum += float(value)
+            except ValueError:
+                log(f"[WARN] Invalid contribution: {line}")
+
+    if current_node is not None:
+        emit(current_node, rank_sum, adjacency)
+
+
+if __name__ == "__main__":
+    main()

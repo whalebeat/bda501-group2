@@ -2,137 +2,112 @@
 # -*- coding: utf-8 -*-
 
 """
-PageRank Mapper
----------------
+PageRank Mapper for Hadoop Streaming.
 
-Input format:
-    Node<TAB>Rank<TAB>Neighbor1,Neighbor2,...
+Input iteration đầu:
+    Node<TAB>AdjacencyList
 
-Example:
-    A    1.0    B,C,D
+Input các iteration tiếp:
+    Node<TAB>PageRank<TAB>AdjacencyList
 
 Output:
-    1. Graph structure
-        A    LINKS:B,C,D
-
-    2. Rank contribution
-        B    0.333333
-        C    0.333333
-        D    0.333333
+    Node<TAB>LINKS:AdjacencyList
+    Neighbor<TAB>Contribution
 """
 
+import os
 import sys
+from typing import Optional, Tuple, List
 
-DEFAULT_RANK = 1.0
 
-def log(message: str):
-    """Write message to stderr."""
+def log(message: str) -> None:
+    """Write warning messages to stderr."""
     print(message, file=sys.stderr)
 
-def parse_line(line: str):
+
+def get_num_nodes() -> int:
+    """Read and validate NUM_NODES."""
+    try:
+        value = int(os.getenv("NUM_NODES", "0"))
+    except ValueError as exc:
+        raise RuntimeError("NUM_NODES must be an integer") from exc
+
+    if value <= 0:
+        raise RuntimeError("NUM_NODES must be greater than zero")
+
+    return value
+
+
+NUM_NODES = get_num_nodes()
+INITIAL_RANK = 1.0 / NUM_NODES
+
+
+def parse_line(line: str) -> Optional[Tuple[str, float, List[str]]]:
     """
-    Parse one input record.
+    Parse an input record.
 
-    Supported formats:
-
-    1. Initial input
-       Node<TAB>AdjacencyList
-
-    2. Intermediate result
-       Node<TAB>Rank<TAB>AdjacencyList
+    Important: only remove newline characters, not tabs, because dangling
+    nodes have an empty adjacency list after the final tab.
     """
+    fields = line.rstrip("\r\n").split("\t")
 
-    parts = line.strip().split("\t")
+    if len(fields) == 2:
+        node = fields[0].strip()
+        rank = INITIAL_RANK
+        adjacency = fields[1].strip()
 
-    # ------------------------------------------------------------------
-    # Initial input
-    # ------------------------------------------------------------------
-
-    if len(parts) == 2:
-
-        node = parts[0].strip()
-
-        rank = DEFAULT_RANK
-
-        links = parts[1].strip()
-
-    # ------------------------------------------------------------------
-    # Intermediate iterations
-    # ------------------------------------------------------------------
-
-    elif len(parts) == 3:
-
-        node = parts[0].strip()
+    elif len(fields) == 3:
+        node = fields[0].strip()
 
         try:
-            rank = float(parts[1])
+            rank = float(fields[1])
         except ValueError:
-            log(f"[WARN] Invalid rank: {line.strip()}")
+            log(f"[WARN] Invalid PageRank: {line.rstrip()}")
             return None
 
-        links = parts[2].strip()
-
-    # ------------------------------------------------------------------
+        adjacency = fields[2].strip()
 
     else:
-
-        log(f"[WARN] Invalid record: {line.strip()}")
+        log(f"[WARN] Invalid record: {line.rstrip()}")
         return None
 
-    if links == "":
-        outlinks = []
-    else:
-        outlinks = [
-            link.strip()
-            for link in links.split(",")
-            if link.strip()
-        ]
+    if not node:
+        log(f"[WARN] Empty node ID: {line.rstrip()}")
+        return None
+
+    outlinks = [
+        neighbor.strip()
+        for neighbor in adjacency.split(",")
+        if neighbor.strip()
+    ]
 
     return node, rank, outlinks
 
-def emit_graph(node, outlinks):
-    """
-    Preserve graph structure.
-    """
 
-    graph = ",".join(outlinks)
-
-    print(f"{node}\tLINKS:{graph}")
-
-
-def emit_contribution(rank, outlinks):
-    """
-    Emit PageRank contribution.
-    """
-
-    if len(outlinks) == 0:
-        return
-
-    contribution = rank / len(outlinks)
-
-    for neighbor in outlinks:
-        print(f"{neighbor}\t{contribution:.10f}")
-
-
-def main():
-
-    for raw in sys.stdin:
-
-        raw = raw.strip()
-
-        if raw == "":
+def main() -> None:
+    """Run the mapper."""
+    for raw_line in sys.stdin:
+        if not raw_line.strip():
             continue
 
-        record = parse_line(raw)
+        record = parse_line(raw_line)
 
         if record is None:
             continue
 
         node, rank, outlinks = record
 
-        emit_graph(node, outlinks)
+        # Preserve graph structure for the next iteration.
+        print(f"{node}\tLINKS:{','.join(outlinks)}")
 
-        emit_contribution(rank, outlinks)
+        # A dangling node does not emit link contributions.
+        if not outlinks:
+            continue
+
+        contribution = rank / len(outlinks)
+
+        for neighbor in outlinks:
+            print(f"{neighbor}\t{contribution:.15f}")
 
 
 if __name__ == "__main__":
