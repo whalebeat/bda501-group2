@@ -196,7 +196,7 @@ log "Uploading dataset to HDFS"
 
 hdfs dfs \
     -Ddfs.blocksize="$HDFS_BLOCK_SIZE" \
-    -put "$DATASET" "$HDFS_INPUT/graph.txt" \
+    -put -f "$DATASET" "$HDFS_INPUT/graph.txt" \
     >>"$LOG_FILE" 2>&1
 
 hdfs dfs -setrep -w "$HDFS_REPLICATION" \

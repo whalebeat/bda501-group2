@@ -1,0 +1,11 @@
+2026-07-22 23:10:51 | PageRank Hadoop Streaming
+2026-07-22 23:10:51 | Dataset          : dataset/graph.txt
+2026-07-22 23:10:51 | Nodes            : 4
+2026-07-22 23:10:51 | Initial dangling : 0.250000000000000
+2026-07-22 23:10:51 | Damping          : 0.85
+2026-07-22 23:10:51 | Threshold        : 1e-6
+2026-07-22 23:10:51 | Max iterations   : 20
+2026-07-22 23:10:51 | Reducers         : 1
+2026-07-22 23:10:51 | Streaming JAR    : /home/hdoop/hadoop/share/hadoop/tools/lib/hadoop-streaming-3.5.0.jar
+2026-07-22 23:10:51 | Checking HDFS
+2026-07-22 23:10:52 | ERROR: HDFS is unavailable

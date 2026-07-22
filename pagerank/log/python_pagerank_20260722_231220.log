@@ -1,0 +1,14 @@
+2026-07-22 23:12:20 | PageRank Hadoop Streaming
+2026-07-22 23:12:20 | Dataset          : dataset/graph.txt
+2026-07-22 23:12:20 | Nodes            : 4
+2026-07-22 23:12:20 | Initial dangling : 0.250000000000000
+2026-07-22 23:12:20 | Damping          : 0.85
+2026-07-22 23:12:20 | Threshold        : 1e-6
+2026-07-22 23:12:20 | Max iterations   : 20
+2026-07-22 23:12:20 | Reducers         : 1
+2026-07-22 23:12:20 | Streaming JAR    : /home/hdoop/hadoop/share/hadoop/tools/lib/hadoop-streaming-3.5.0.jar
+2026-07-22 23:12:20 | Checking HDFS
+2026-07-22 23:12:21 | Cleaning old HDFS output
+rm: Cannot delete /pagerank. Name node is in safe mode.
+2026-07-22 23:12:23 | Uploading dataset to HDFS
+put: `/pagerank/input/graph.txt': File exists
