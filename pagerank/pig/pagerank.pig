@@ -91,55 +91,50 @@ structure = FOREACH records GENERATE node AS node:chararray,
 
 --------------------------------------------------------------------------------
 -- SECTION 7
--- Group By Node
+-- Group By Node, Sum Contributions, Handle Dangling Nodes
 --------------------------------------------------------------------------------
 
-grouped_contribs = GROUP contributions BY dest;
+-- COGROUP groups both `structure` and `contributions` by the same key in one step
+--
+-- For every node in `structure`:
+--   - If the node received link contributions:  contributions bag is non-empty.
+--   - If the node received NO contributions    contributions bag is empty
+--     (dangling node, or a node nobody links to) → SUM returns NULL → 0.0.
+--
+-- Using COGROUP avoids the HASH_JOIN execution strategy that caused job
+-- failures in Pig 0.18 on single-node clusters.
+
+cogrp = COGROUP structure BY node, contributions BY dest;
 
 
 --------------------------------------------------------------------------------
 -- SECTION 8
--- Sum Contributions
---------------------------------------------------------------------------------
-
-summed = FOREACH grouped_contribs GENERATE
-    group                      AS node:chararray,
-    SUM(contributions.amount)  AS rank_sum:double;
-
-
---------------------------------------------------------------------------------
--- SECTION 9
--- Handle Dangling Nodes  +  Join with Graph Structure
---------------------------------------------------------------------------------
-
--- Dangling mass is redistributed uniformly: each node receives
--- DAMPING * DANGLING / N  in addition to its link contributions.
---
--- LEFT OUTER JOIN: every node in `structure` appears even if it received
--- zero link contributions (rank_sum will be NULL → treated as 0.0 below).
-
-joined = JOIN structure BY node LEFT OUTER, summed BY node;
-
-
---------------------------------------------------------------------------------
--- SECTION 10
 -- Calculate New PageRank
 --------------------------------------------------------------------------------
 
 -- new_rank = (1 - d) / N  +  d * ( rank_sum  +  DANGLING / N )
+--
+-- FLATTEN(structure.adj):
+--   Each node appears exactly once in `structure`, so the bag has one element.
+--   FLATTEN extracts that single adj value into the output tuple.
+--   Nodes that appear only in `contributions` (not in `structure`) are
+--   naturally dropped because FLATTEN of an empty bag produces 0 rows.
 
-new_ranks = FOREACH joined GENERATE
-    structure::node AS node:chararray,
-    (1.0 - (double)$DAMPING) / (double)$NUM_NODES
-        + (double)$DAMPING
-          * ( (summed::rank_sum IS NULL ? 0.0 : summed::rank_sum)
-            + (double)$DANGLING / (double)$NUM_NODES )
-    AS new_rank:double,
-    structure::adj AS adj:chararray;
+new_ranks = FOREACH cogrp {
+    rank_sum = SUM(contributions.amount);
+    GENERATE
+        group AS node:chararray,
+        (1.0 - (double)$DAMPING) / (double)$NUM_NODES
+            + (double)$DAMPING
+              * ( (rank_sum IS NULL ? 0.0 : rank_sum)
+                + (double)$DANGLING / (double)$NUM_NODES )
+        AS new_rank:double,
+        FLATTEN(structure.adj) AS adj:chararray;
+};
 
 
 --------------------------------------------------------------------------------
--- SECTION 12
+-- SECTION 9
 -- Sort Output
 --------------------------------------------------------------------------------
 
@@ -147,7 +142,7 @@ sorted = ORDER new_ranks BY node ASC;
 
 
 --------------------------------------------------------------------------------
--- SECTION 13
+-- SECTION 10
 -- Store Result
 --------------------------------------------------------------------------------
 
