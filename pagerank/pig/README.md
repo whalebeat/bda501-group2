@@ -69,9 +69,26 @@ DAMPING=0.85 THRESHOLD=1e-6 ./run.sh ../dataset/Wiki-Vote.txt
 |---|---|---|
 | `DAMPING` | `0.85` | Damping factor |
 | `THRESHOLD` | `1e-6` | Convergence threshold (max-delta) |
-| `HDFS_REPLICATION` | `1` | HDFS replication factor |
-| `HDFS_BLOCK_SIZE` | `134217728` | HDFS block size (128 MB) |
-| `HDFS_ROOT` | `/pagerank/pig` | HDFS root path |
+| `PIG_EXEC_TYPE` | `mapreduce` | `local` (fast, no YARN) or `mapreduce` (full cluster) |
+| `HDFS_REPLICATION` | `1` | HDFS replication factor (mapreduce mode only) |
+| `HDFS_BLOCK_SIZE` | `134217728` | HDFS block size, 128 MB (mapreduce mode only) |
+| `HDFS_ROOT` | `/pagerank/pig` | HDFS root path (mapreduce mode only) |
+
+### Local mode vs MapReduce mode
+
+| | `local` | `mapreduce` |
+|---|---|---|
+| YARN / HDFS required | No | Yes |
+| Typical time/iter (4-node graph) | **~2–3s** | ~27s |
+| Suitable for | Small graphs, quick testing | Large datasets (Wiki-Vote etc.) |
+
+```bash
+# Fast local mode — skips YARN/HDFS entirely (~10× faster for small graphs)
+PIG_EXEC_TYPE=local ./run.sh
+
+# Full MapReduce mode (default)
+PIG_EXEC_TYPE=mapreduce ./run.sh ../dataset/Wiki-Vote.txt 20
+```
 
 ## What `run.sh` does
 

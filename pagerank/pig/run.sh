@@ -52,6 +52,12 @@ HDFS_ROOT="${HDFS_ROOT:-/pagerank/pig}"
 HDFS_INPUT="$HDFS_ROOT/input"
 HDFS_OUTPUT="$HDFS_ROOT/output"
 
+# Execution type: "mapreduce" (default) or "local"
+# Use PIG_EXEC_TYPE=local for small graphs to skip YARN/HDFS overhead entirely.
+#   PIG_EXEC_TYPE=local ./run.sh                 # ~2-3s/iter instead of ~27s/iter
+#   PIG_EXEC_TYPE=mapreduce ./run.sh             # full Hadoop cluster
+PIG_EXEC_TYPE="${PIG_EXEC_TYPE:-mapreduce}"
+
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
@@ -158,29 +164,13 @@ rm -f "$BENCHMARK_DIR/summary.txt"
 echo "Iteration,Seconds" > "$BENCHMARK_DIR/time.csv"
 
 # -----------------------------------------------------------------------------
-# Prepare HDFS
+# Prepare input (HDFS for mapreduce, local tmpdir for local mode)
 # -----------------------------------------------------------------------------
 
-log "Checking HDFS"
-hdfs dfs -ls / >/dev/null 2>&1 || fail "HDFS is unavailable"
-
-log "Cleaning old HDFS output under $HDFS_ROOT"
-hdfs dfs -rm -r -f "$HDFS_ROOT" >>"$LOG_FILE" 2>&1 || true
-hdfs dfs -mkdir -p "$HDFS_INPUT"
-
-# Preprocess: convert 2-column (Node<TAB>AdjacencyList) to
-# 3-column (Node<TAB>InitialRank<TAB>AdjacencyList) with rank = 1/N.
-#
-# This lets pagerank.pig always receive a uniform 3-column input
-# (no runtime format detection needed inside Pig).
-#
-# The preprocessed file is written to a temp path and removed after upload.
-
-PREPROCESSED="/tmp/pig_pagerank_init_${TIMESTAMP}.txt"
-
-log "Preprocessing dataset → 3-column format (initial rank = 1/$NUM_NODES)"
-
-python3 - "$DATASET" "$NUM_NODES" "$PREPROCESSED" <<'PY'
+# Preprocess helper: converts 2-column (Node<TAB>Adj) → 3-column (Node<TAB>1/N<TAB>Adj)
+preprocess_dataset() {
+    local src="$1" n="$2" dst="$3"
+    python3 - "$src" "$n" "$dst" <<'PY'
 import sys
 
 filename, num_nodes, out_file = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -195,29 +185,55 @@ with open(filename, "r", encoding="utf-8") as fin, \
         parts = line.split("\t", 1)
         node  = parts[0].strip()
         adj   = parts[1].strip() if len(parts) >= 2 else ""
-        # Always write a trailing TAB so dangling nodes (adj="") still
-        # produce a proper 3-field record when loaded by PigStorage.
         fout.write(f"{node}\t{init_rank:.15f}\t{adj}\n")
 PY
+}
 
-log "Uploading preprocessed dataset to HDFS: $HDFS_INPUT/graph.txt"
+log "Execution type   : $PIG_EXEC_TYPE"
+log "Preprocessing dataset → 3-column format (initial rank = 1/$NUM_NODES)"
 
-hdfs dfs \
-    -Ddfs.blocksize="$HDFS_BLOCK_SIZE" \
-    -put -f "$PREPROCESSED" "$HDFS_INPUT/graph.txt" \
-    >>"$LOG_FILE" 2>&1
+if [[ "$PIG_EXEC_TYPE" == "local" ]]; then
+    # -------------------------------------------------------------------------
+    # Local mode: use a temp directory; no HDFS operations needed.
+    # -------------------------------------------------------------------------
+    LOCAL_WORKDIR="/tmp/pig_pagerank_local_${TIMESTAMP}"
+    mkdir -p "$LOCAL_WORKDIR/input"
 
-hdfs dfs -setrep -w "$HDFS_REPLICATION" \
-    "$HDFS_INPUT/graph.txt" \
-    >>"$LOG_FILE" 2>&1
+    CURRENT_INPUT="$LOCAL_WORKDIR/input/graph.txt"
+    preprocess_dataset "$DATASET" "$NUM_NODES" "$CURRENT_INPUT"
 
-rm -f "$PREPROCESSED"
+else
+    # -------------------------------------------------------------------------
+    # MapReduce mode: preprocess to a temp file then upload to HDFS.
+    # -------------------------------------------------------------------------
+    log "Checking HDFS"
+    hdfs dfs -ls / >/dev/null 2>&1 || fail "HDFS is unavailable"
+
+    log "Cleaning old HDFS output under $HDFS_ROOT"
+    hdfs dfs -rm -r -f "$HDFS_ROOT" >>"$LOG_FILE" 2>&1 || true
+    hdfs dfs -mkdir -p "$HDFS_INPUT"
+
+    PREPROCESSED="/tmp/pig_pagerank_init_${TIMESTAMP}.txt"
+    preprocess_dataset "$DATASET" "$NUM_NODES" "$PREPROCESSED"
+
+    log "Uploading preprocessed dataset to HDFS: $HDFS_INPUT/graph.txt"
+    hdfs dfs \
+        -Ddfs.blocksize="$HDFS_BLOCK_SIZE" \
+        -put -f "$PREPROCESSED" "$HDFS_INPUT/graph.txt" \
+        >>"$LOG_FILE" 2>&1
+    # -w removed: don't block waiting for replication confirmation (saves ~1s)
+    hdfs dfs -setrep "$HDFS_REPLICATION" \
+        "$HDFS_INPUT/graph.txt" \
+        >>"$LOG_FILE" 2>&1
+    rm -f "$PREPROCESSED"
+
+    CURRENT_INPUT="$HDFS_INPUT/graph.txt"
+fi
 
 # -----------------------------------------------------------------------------
 # Iteration loop
 # -----------------------------------------------------------------------------
 
-CURRENT_INPUT="$HDFS_INPUT/graph.txt"
 DANGLING="$INITIAL_DANGLING"
 
 TOTAL_START="$(date +%s)"
@@ -228,33 +244,54 @@ LOCAL_CURRENT=""
 for (( iteration = 1; iteration <= MAX_ITERATIONS; iteration++ )); do
     log "Starting iteration $iteration"
 
-    CURRENT_OUTPUT="$HDFS_OUTPUT/iter$iteration"
     LOCAL_CURRENT="$OUTPUT_DIR/iter$iteration.txt"
-
-    hdfs dfs -rm -r -f "$CURRENT_OUTPUT" >>"$LOG_FILE" 2>&1 || true
 
     ITERATION_START="$(date +%s)"
 
-    # Run ONE PageRank iteration via Apache Pig.
-    # -x mapreduce  : execute on the Hadoop cluster (not local mode).
-    # -p KEY=VALUE  : substitute parameters inside pagerank.pig.
-    pig -x mapreduce \
-        -p INPUT="$CURRENT_INPUT" \
-        -p OUTPUT="$CURRENT_OUTPUT" \
-        -p NUM_NODES="$NUM_NODES" \
-        -p DAMPING="$DAMPING" \
-        -p DANGLING="$DANGLING" \
-        "$PIG_SCRIPT" \
-        2>&1 | tee -a "$LOG_FILE"
+    if [[ "$PIG_EXEC_TYPE" == "local" ]]; then
+        # Local mode: INPUT/OUTPUT are local filesystem paths.
+        # Output dir must not exist before pig writes to it.
+        CURRENT_OUTPUT="$LOCAL_WORKDIR/iter$iteration"
+        rm -rf "$CURRENT_OUTPUT"
+
+        pig -x local \
+            -p INPUT="$CURRENT_INPUT" \
+            -p OUTPUT="$CURRENT_OUTPUT" \
+            -p NUM_NODES="$NUM_NODES" \
+            -p DAMPING="$DAMPING" \
+            -p DANGLING="$DANGLING" \
+            "$PIG_SCRIPT" \
+            2>&1 | tee -a "$LOG_FILE"
+
+        # Combine local part files into single result file.
+        cat "$CURRENT_OUTPUT"/part-* > "$LOCAL_CURRENT"
+
+        CURRENT_INPUT="$CURRENT_OUTPUT"
+    else
+        # MapReduce mode: INPUT/OUTPUT are HDFS paths.
+        # Output path is always a new unique path — no pre-cleanup needed.
+        CURRENT_OUTPUT="$HDFS_OUTPUT/iter$iteration"
+
+        pig -x mapreduce \
+            -p INPUT="$CURRENT_INPUT" \
+            -p OUTPUT="$CURRENT_OUTPUT" \
+            -p NUM_NODES="$NUM_NODES" \
+            -p DAMPING="$DAMPING" \
+            -p DANGLING="$DANGLING" \
+            "$PIG_SCRIPT" \
+            2>&1 | tee -a "$LOG_FILE"
+
+        # Combine HDFS part files into single local result file.
+        hdfs dfs -cat "$CURRENT_OUTPUT"/part-* \
+            > "$LOCAL_CURRENT"
+
+        CURRENT_INPUT="$CURRENT_OUTPUT"
+    fi
 
     ITERATION_END="$(date +%s)"
     ITERATION_SECONDS=$(( ITERATION_END - ITERATION_START ))
 
     echo "$iteration,$ITERATION_SECONDS" >> "$BENCHMARK_DIR/time.csv"
-
-    # Combine all reducer part files into one local result file.
-    hdfs dfs -cat "$CURRENT_OUTPUT"/part-* \
-        > "$LOCAL_CURRENT"
 
     # Validate output and check convergence using python/verify.py.
     # verify.py writes:
@@ -293,8 +330,6 @@ for (( iteration = 1; iteration <= MAX_ITERATIONS; iteration++ )); do
         log "Convergence reached at iteration $iteration"
         break
     fi
-
-    CURRENT_INPUT="$CURRENT_OUTPUT"
 done
 
 # -----------------------------------------------------------------------------
