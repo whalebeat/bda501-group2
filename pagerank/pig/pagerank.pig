@@ -3,30 +3,25 @@
 --
 -- Description:
 --     Execute ONE iteration of the PageRank algorithm.
+--     Mirrors the logic of python/mapper.py + python/reducer.py.
 --
--- Input:
---     INPUT
+-- Input format  (always 3 columns — run.sh preprocesses the first iteration):
+--     Node<TAB>CurrentPageRank<TAB>AdjacencyList
+--     Adjacency list is comma-separated; dangling nodes have an empty adj field.
 --
--- Output:
---     OUTPUT
+-- Output format:
+--     Node<TAB>NewPageRank<TAB>AdjacencyList
 --
--- Parameters:
---     INPUT
---     OUTPUT
---     NUM_NODES
---     DAMPING
+-- Parameters (passed with  pig -p KEY=VALUE):
+--     INPUT      HDFS input path
+--     OUTPUT     HDFS output path
+--     NUM_NODES  total number of nodes  (integer)
+--     DAMPING    damping factor          (e.g. 0.85)
+--     DANGLING   total dangling rank mass from the previous iteration
 --
--- Input Format
+-- PageRank formula (same as python/reducer.py):
 --
--- First iteration
---     Node<TAB>AdjacencyList
---
--- Later iterations
---     Node<TAB>PageRank<TAB>AdjacencyList
---
--- Output Format
---
---     Node<TAB>PageRank<TAB>AdjacencyList
+--     new_rank = (1 - d) / N  +  d * ( sum_incoming_contributions + DANGLING / N )
 --
 --------------------------------------------------------------------------------
 
@@ -36,40 +31,8 @@
 -- Load Input
 --------------------------------------------------------------------------------
 
--- TODO
--- Load data from HDFS
---
--- Example
--- A    B,C,D
---
--- or
---
--- A    0.2000    B,C,D
-
-
-
---------------------------------------------------------------------------------
--- SECTION 2
--- Detect Input Format
---------------------------------------------------------------------------------
-
--- TODO
---
--- Detect whether the current input contains
---
--- 2 columns
---     Node
---     Adjacency List
---
--- or
---
--- 3 columns
---     Node
---     Current Rank
---     Adjacency List
---
--- Initialize PageRank if needed.
-
+records = LOAD '$INPUT' USING PigStorage('\t')
+    AS (node:chararray, rank:double, adj:chararray);
 
 
 --------------------------------------------------------------------------------
@@ -77,18 +40,18 @@
 -- Parse Graph
 --------------------------------------------------------------------------------
 
--- TODO
---
--- Parse
---
--- Node
--- CurrentRank
--- AdjacencyList
---
--- Calculate
---
--- OutDegree
+-- Compute out-degree:
+--   Adjacency list is comma-separated → replace ',' with ' ' then TOKENIZE.
+--   Dangling nodes (adj = "" or NULL) get out_degree = 0.
 
+parsed = FOREACH records GENERATE
+    node,
+    rank,
+    adj,
+    (adj IS NULL OR adj == ''
+        ? 0
+        : (int) SIZE(TOKENIZE(REPLACE(adj, ',', ' ')))
+    ) AS out_degree:int;
 
 
 --------------------------------------------------------------------------------
@@ -96,19 +59,23 @@
 -- Generate Contributions
 --------------------------------------------------------------------------------
 
--- TODO
---
--- For every outgoing edge
---
--- Contribution =
---
--- CurrentRank / OutDegree
---
--- Emit
---
--- DestinationNode
--- Contribution
+-- Only non-dangling nodes distribute rank to their neighbours.
+-- Contribution per neighbour = current_rank / out_degree.
+-- Dangling mass is handled globally in SECTION 9 via the DANGLING parameter.
 
+non_dangling = FILTER parsed BY out_degree > 0;
+
+flat = FOREACH non_dangling {
+    neighbors = TOKENIZE(REPLACE(adj, ',', ' '));
+    GENERATE
+        adj  AS adj:chararray,
+        rank / (double) out_degree AS contribution:double,
+        FLATTEN(neighbors) AS neighbor:chararray;
+};
+
+contributions = FOREACH flat GENERATE
+    neighbor     AS dest:chararray,
+    contribution AS amount:double;
 
 
 --------------------------------------------------------------------------------
@@ -116,33 +83,10 @@
 -- Preserve Graph Structure
 --------------------------------------------------------------------------------
 
--- TODO
---
--- Preserve adjacency list
---
--- Node
--- LINKS
---
--- This information is required
--- for the next iteration.
+-- Keep each node's adjacency list so the next iteration can re-use it.
 
-
-
---------------------------------------------------------------------------------
--- SECTION 6
--- Merge Intermediate Records
---------------------------------------------------------------------------------
-
--- TODO
---
--- Union
---
--- Contributions
---
--- +
---
--- Graph Structure
-
+structure = FOREACH records GENERATE node AS node:chararray,
+                                      adj  AS adj:chararray;
 
 
 --------------------------------------------------------------------------------
@@ -150,14 +94,7 @@
 -- Group By Node
 --------------------------------------------------------------------------------
 
--- TODO
---
--- GROUP all records
---
--- BY
---
--- Node
-
+grouped_contribs = GROUP contributions BY dest;
 
 
 --------------------------------------------------------------------------------
@@ -165,30 +102,23 @@
 -- Sum Contributions
 --------------------------------------------------------------------------------
 
--- TODO
---
--- Sum all incoming contributions
---
--- Ignore graph metadata
---
--- Keep adjacency list
-
+summed = FOREACH grouped_contribs GENERATE
+    group                      AS node:chararray,
+    SUM(contributions.amount)  AS rank_sum:double;
 
 
 --------------------------------------------------------------------------------
 -- SECTION 9
--- Handle Dangling Nodes
+-- Handle Dangling Nodes  +  Join with Graph Structure
 --------------------------------------------------------------------------------
 
--- TODO
+-- Dangling mass is redistributed uniformly: each node receives
+-- DAMPING * DANGLING / N  in addition to its link contributions.
 --
--- Optional
---
--- Redistribute dangling mass
---
--- If not implemented,
--- clearly document it.
+-- LEFT OUTER JOIN: every node in `structure` appears even if it received
+-- zero link contributions (rank_sum will be NULL → treated as 0.0 below).
 
+joined = JOIN structure BY node LEFT OUTER, summed BY node;
 
 
 --------------------------------------------------------------------------------
@@ -196,56 +126,24 @@
 -- Calculate New PageRank
 --------------------------------------------------------------------------------
 
--- TODO
---
--- PR =
---
--- (1-D)/N
---
--- +
---
--- D * IncomingRank
+-- new_rank = (1 - d) / N  +  d * ( rank_sum  +  DANGLING / N )
 
-
-
---------------------------------------------------------------------------------
--- SECTION 11
--- Build Output Record
---------------------------------------------------------------------------------
-
--- TODO
---
--- Output
---
--- Node
--- NewRank
--- AdjacencyList
---
--- Format
---
--- Node<TAB>Rank<TAB>AdjacencyList
-
+new_ranks = FOREACH joined GENERATE
+    structure::node AS node:chararray,
+    (1.0 - (double)$DAMPING) / (double)$NUM_NODES
+        + (double)$DAMPING
+          * ( (summed::rank_sum IS NULL ? 0.0 : summed::rank_sum)
+            + (double)$DANGLING / (double)$NUM_NODES )
+    AS new_rank:double,
+    structure::adj AS adj:chararray;
 
 
 --------------------------------------------------------------------------------
 -- SECTION 12
--- Sort Output (Optional)
+-- Sort Output
 --------------------------------------------------------------------------------
 
--- TODO
---
--- Sort by
---
--- Node
---
--- This helps
---
--- debugging
---
--- comparison
---
--- convergence checking
-
+sorted = ORDER new_ranks BY node ASC;
 
 
 --------------------------------------------------------------------------------
@@ -253,35 +151,7 @@
 -- Store Result
 --------------------------------------------------------------------------------
 
--- TODO
---
--- Store output
---
--- into HDFS
---
--- OUTPUT
-
-
-
---------------------------------------------------------------------------------
--- SECTION 14
--- Validation (Optional)
---------------------------------------------------------------------------------
-
--- Suggested checks
---
--- Number of nodes unchanged
---
--- No duplicated nodes
---
--- Every node has one record
---
--- Rank is numeric
---
--- Output format is correct
---
--- Ready for next iteration
-
+STORE sorted INTO '$OUTPUT' USING PigStorage('\t');
 
 
 --------------------------------------------------------------------------------
