@@ -310,7 +310,7 @@ TOTAL_SECONDS=$(( TOTAL_END - TOTAL_START ))
 cp "$LOCAL_CURRENT" "$OUTPUT_DIR/final.txt"
 
 FINAL_TOTAL_RANK="$(
-    awk -F '\t' '{sum += $2} END {printf "%.15f", sum}' \
+    LC_ALL=C awk -F '\t' '{sum += $2} END {printf "%.15f", sum}' \
         "$OUTPUT_DIR/final.txt"
 )"
 
