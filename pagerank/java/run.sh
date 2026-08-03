@@ -53,6 +53,7 @@ hadoop jar "$JAR" pagerank.hadoop.PageRankDriver \
   "$HDFS_INPUT_DIR/${DATASET_LABEL}.tsv" \
   "$HDFS_OUTPUT_BASE" \
   "$DAMPING" "$TOLERANCE" "$MAX_ITER" "$DATASET_LABEL" \
+  "$BENCHMARK_FILE" "$LOG_FILE" \
   2>&1 | tee "$LOG_FILE"
 
 # 5. Download final output (thu muc iterN cuoi cung, N = so vong lap thuc te)

@@ -17,8 +17,8 @@ echo ">> Don dep build cu"
 rm -rf "$BUILD_DIR" "$JAR_NAME"
 mkdir -p "$BUILD_DIR"
 
-echo ">> Bien dich Java (dung classpath cua Hadoop dang cai)"
-javac -classpath "$(hadoop classpath)" -d "$BUILD_DIR" $(find "$SRC_DIR" -name "*.java")
+echo ">> Bien dich Java (dung classpath cua Hadoop dang cai, --release 11 de tuong thich JVM cua Hadoop)"
+javac --release 11 -classpath "$(hadoop classpath)" -d "$BUILD_DIR" $(find "$SRC_DIR" -name "*.java")
 
 echo ">> Dong goi jar"
 jar -cf "$JAR_NAME" -C "$BUILD_DIR" .
