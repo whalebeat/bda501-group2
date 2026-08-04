@@ -301,8 +301,19 @@ TOTAL_SECONDS=$((TOTAL_END - TOTAL_START))
 cp "$LOCAL_CURRENT" "$OUTPUT_DIR/final.txt"
 
 FINAL_TOTAL_RANK="$(
-    awk -F '\t' '{sum += $2} END {printf "%.15f", sum}' \
-        "$OUTPUT_DIR/final.txt"
+    python3 - "$OUTPUT_DIR/final.txt" <<'PY'
+import sys
+total = 0.0
+with open(sys.argv[1], encoding="utf-8") as f:
+    for line in f:
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) >= 2:
+            try:
+                total += float(parts[1])
+            except ValueError:
+                pass
+print(f"{total:.15f}")
+PY
 )"
 
 {
