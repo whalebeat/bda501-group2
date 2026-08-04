@@ -31,6 +31,11 @@ java/
 | HDFS replication | 1 |
 
 Có thể ghi đè: `./run.sh <input> <label> [damping] [tolerance] [maxIter]`.
+Bỏ trống thì dùng đúng 3 giá trị mặc định ở trên. Ví dụ ghi đè:
+
+```bash
+./run.sh ../dataset/wiki-vote.tsv wikivote 0.85 1e-8 100
+```
 
 ## Build
 
@@ -47,7 +52,8 @@ Yêu cầu lệnh `hadoop` có trong PATH.
 # Toy graph 4 node (test nhanh)
 ./run.sh ../dataset/toy.tsv toy
 
-# Dataset thật Wiki-Vote
+# Dataset thật Wiki-Vote (dùng file goc hoac da loc dong '#' deu duoc,
+# PreprocessMapper va buoc dem so node tu dong bo qua dong '#')
 ./run.sh ../dataset/Wiki-Vote.txt wikivote
 ```
 
@@ -59,6 +65,9 @@ lặp về `../output/java_<dataset>/` → ghi log vào `../log/` và benchmark 
 
 - Tổng PageRank toàn đồ thị phải xấp xỉ **1.0**.
 - Đối chiếu kết quả từng node với bản Python/Java thuần hoặc Pig chạy cùng dataset.
+- Log in ra theo cùng định dạng với bản Python/Pig (`yyyy-MM-dd HH:mm:ss | Nhãn : giá trị`,
+  các nhãn `Iteration time`, `Next dangling`, `Iterations`, `Converged`, `Total PageRank`,
+  `Total time`...) để tiện gộp chung vào bảng so sánh 3 engine trong báo cáo.
 
 ## Ghi chú kỹ thuật
 
