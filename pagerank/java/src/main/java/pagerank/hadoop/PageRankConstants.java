@@ -30,7 +30,6 @@ public final class PageRankConstants {
     public static final int NUM_REDUCERS = 1;
 
     public static final String COUNTER_GROUP = "PAGERANK";
-    public static final String COUNTER_DIFF_SCALED = "DIFF_SCALED";
     public static final String COUNTER_NEXT_DANGLING_MASS_SCALED = "NEXT_DANGLING_MASS_SCALED";
     public static final String COUNTER_INITIAL_DANGLING_MASS_SCALED = "INITIAL_DANGLING_MASS_SCALED";
 }

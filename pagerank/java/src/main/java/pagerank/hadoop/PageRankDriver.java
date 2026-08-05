@@ -8,9 +8,11 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
@@ -29,16 +31,25 @@ import org.apache.hadoop.util.ToolRunner;
  * (xem Giai_thich_thuat_toan_Java_Hadoop.md muc 5):
  *
  *   1) Chay PreprocessJob mot lan, lay danglingSum khoi tao.
- *   2) Lap: chay PageRankIterationJob voi danglingSum hien tai, doc
- *      DIFF_SCALED va NEXT_DANGLING_MASS_SCALED tu Counter sau khi job
- *      hoan tat -&gt; neu diff &lt; tol thi dung, nguoc lai dung
- *      NEXT_DANGLING_MASS_SCALED lam danglingSum cho vong ke tiep, va
- *      output vong nay lam input vong sau. Moi vong lap giu nguyen thu
- *      muc output tren HDFS (khong xoa) theo yeu cau
- *      "Keep every iteration output" trong PageRank_Hadoop_Project_Setup_Guide.txt.
+ *   2) Lap: chay PageRankIterationJob voi danglingSum hien tai. Sau khi job
+ *      hoan tat, doc NEXT_DANGLING_MASS_SCALED tu Hadoop Counter (dung lam
+ *      danglingSum cho vong ke tiep), va tu doc truc tiep output cua vong
+ *      truoc + vong nay de tinh max(|newRank-oldRank|) qua moi node - neu
+ *      max nay &lt; tol thi dung, nguoc lai tiep tuc, output vong nay lam
+ *      input vong sau. Moi vong lap giu nguyen thu muc output tren HDFS
+ *      (khong xoa) theo yeu cau "Keep every iteration output" trong
+ *      PageRank_Hadoop_Project_Setup_Guide.txt.
  *   3) Doc truc tiep output cuoi cung (chi N dong), sap xep in Top 10 theo
  *      PageRank, in dong CSV_RESULT cung dinh dang voi pagerank.py /
  *      PageRank.java de gop vao bang so sanh hieu nang cua bao cao (Muc 5.1).
+ *
+ * Tieu chi hoi tu duoc dong bo voi ban Python/Pig (python/verify.py): dung
+ * max(|newRank-oldRank|) qua TOAN BO node so voi tolerance, KHONG PHAI tong
+ * cong don qua moi node (tong luon lon hon max rat nhieu voi do thi lon,
+ * khien so vong lap hoi tu bi lech giua cac engine du cung dinh nghia PageRank).
+ * Hadoop Counter khong ho tro phep max (chi cong don), nen gia tri nay duoc
+ * driver tu tinh bang cach doc lai output cua 2 vong lien tiep, giong cach
+ * verify.py lam.
  *
  * Log duoc in theo dinh dang thong nhat voi ban Python/Pig (de gop chung vao
  * bao cao so sanh 3 engine):
@@ -162,23 +173,22 @@ public class PageRankDriver extends Configured implements Tool {
             }
 
             Counters iterCounters = iterJob.getCounters();
-            long diffScaled = iterCounters
-                    .findCounter(PageRankConstants.COUNTER_GROUP, PageRankConstants.COUNTER_DIFF_SCALED)
-                    .getValue();
             long nextDanglingScaled = iterCounters
                     .findCounter(PageRankConstants.COUNTER_GROUP,
                             PageRankConstants.COUNTER_NEXT_DANGLING_MASS_SCALED)
                     .getValue();
-
-            lastDiff = diffScaled / (double) PageRankConstants.SCALE;
             danglingSum = nextDanglingScaled / (double) PageRankConstants.SCALE;
+
+            // Max delta giua vong truoc va vong nay - cung tieu chi hoi tu voi
+            // python/verify.py (xem javadoc dau file).
+            lastDiff = computeMaxDelta(fs, prevOutput, currOutput);
             actualIterations = i;
 
             long tIterEnd = System.currentTimeMillis();
             long iterSeconds = Math.round((tIterEnd - tIterStart) / 1000.0);
 
             log("Iteration", i);
-            log("Diff", lastDiff);
+            log("Max delta", lastDiff);
             log("Iteration time", iterSeconds + " seconds");
             log("Next dangling", danglingSum);
 
@@ -265,6 +275,56 @@ public class PageRankDriver extends Configured implements Tool {
             }
         }
         return nodes.size();
+    }
+
+    /**
+     * Tinh max(|newRank-oldRank|) qua toan bo node giua 2 thu muc output lien
+     * tiep - cung cong thuc voi calculate_metrics() trong python/verify.py
+     * (dung max_delta, khong phai tong/trung binh).
+     */
+    private double computeMaxDelta(FileSystem fs, Path prevDir, Path currDir) throws IOException {
+        Map<String, Double> prevRanks = readRanksMap(fs, prevDir);
+        Map<String, Double> currRanks = readRanksMap(fs, currDir);
+
+        Set<String> allNodes = new HashSet<>(prevRanks.keySet());
+        allNodes.addAll(currRanks.keySet());
+
+        double maxDelta = 0.0;
+        for (String node : allNodes) {
+            double prevRank = prevRanks.getOrDefault(node, 0.0);
+            double currRank = currRanks.getOrDefault(node, 0.0);
+            double delta = Math.abs(currRank - prevRank);
+            if (delta > maxDelta) {
+                maxDelta = delta;
+            }
+        }
+        return maxDelta;
+    }
+
+    /** Doc thu muc output thanh map node -&gt; rank (dung cho computeMaxDelta). */
+    private Map<String, Double> readRanksMap(FileSystem fs, Path dir) throws IOException {
+        Map<String, Double> ranks = new HashMap<>();
+        for (FileStatus fst : fs.listStatus(dir)) {
+            String name = fst.getPath().getName();
+            if (!fst.isFile() || name.startsWith("_")) {
+                continue;
+            }
+            try (FSDataInputStream in = fs.open(fst.getPath());
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.trim().isEmpty()) {
+                        continue;
+                    }
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length < 2) {
+                        continue;
+                    }
+                    ranks.put(parts[0], Double.parseDouble(parts[1]));
+                }
+            }
+        }
+        return ranks;
     }
 
     /** Doc toan bo cac file part-r-* trong thu muc output cuoi cung. */

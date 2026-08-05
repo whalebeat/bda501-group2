@@ -74,3 +74,7 @@ lặp về `../output/java_<dataset>/` → ghi log vào `../log/` và benchmark 
 - File SNAP (như `Wiki-Vote.txt`) có dòng comment `#` đầu file — tự động bị bỏ qua.
 - Số Reducer cố định = 1 để mỗi vòng lặp ra đúng 1 file output.
 - `PageRankDriver` implement `Tool`, nhận tham số chuẩn Hadoop `-D <key>=<value>`.
+- Điều kiện hội tụ: `max(|newRank − oldRank|)` qua **toàn bộ node** so với `tolerance` — cùng
+  công thức với `python/verify.py` (`max_delta`), không phải tổng cộng dồn qua mọi node. Do
+  Hadoop Counter không hỗ trợ phép max, `PageRankDriver` tự đọc lại output của vòng trước và
+  vòng hiện tại (giống `verify.py`) để tính giá trị này sau mỗi vòng lặp.

@@ -15,7 +15,9 @@ import org.apache.hadoop.mapreduce.Reducer;
  *   - Ap dung cong thuc PageRank:
  *       newRank = (1-d)/N + d * (sumContrib + danglingSumPrev / N)
  *   - Ghi ra ban ghi moi: node &lt;TAB&gt; newRank &lt;TAB&gt; adjList.
- *   - Cong |newRank - oldRank| vao counter DIFF_SCALED (dung de kiem tra hoi tu).
+ *   - (Kiem tra hoi tu KHONG lam o day nua - PageRankDriver tu doc lai output
+ *     cua 2 vong lien tiep va tinh max(|newRank-oldRank|), cung tieu chi voi
+ *     python/verify.py. Xem javadoc PageRankDriver.)
  *
  * [SUA 2026-07-25 - xem Giai_thich_thuat_toan_Java_Hadoop.md muc 4]
  * Neu node nay la dangling (adjList rong), cong newRank (rank VUA TINH XONG
@@ -74,11 +76,6 @@ public class PageRankReducer extends Reducer<Text, Text, Text, Text> {
 
         outValue.set(newRank + "\t" + adjList);
         context.write(key, outValue);
-
-        double diff = Math.abs(newRank - oldRank);
-        long diffScaled = Math.round(diff * PageRankConstants.SCALE);
-        context.getCounter(PageRankConstants.COUNTER_GROUP, PageRankConstants.COUNTER_DIFF_SCALED)
-                .increment(diffScaled);
 
         if (adjList.isEmpty()) {
             long danglingScaled = Math.round(newRank * PageRankConstants.SCALE);
